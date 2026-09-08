@@ -27,6 +27,7 @@ use transport::Arrived;
 use transport::Directions;
 use transport::Transport;
 use transport::error::{Result, classify, protocol_error};
+use transport::socket;
 use transport::wire::{host_of, read_head, with_default_port};
 
 pub struct WebSocketTransport {
@@ -56,14 +57,7 @@ impl WebSocketTransport {
     ///
     /// Where the address is taken, malformed, or not permitted.
     pub fn bind(&self) -> Result<(TcpListener, String)> {
-        let listener =
-            TcpListener::bind(&self.bind).map_err(|e| classify("binding the listener", &e))?;
-
-        let local = listener
-            .local_addr()
-            .map_err(|e| classify("reading the bound address", &e))?;
-
-        Ok((listener, local.to_string()))
+        socket::bind_tcp(&self.bind)
     }
 
     /// Take one connection, complete the upgrade, and read one frame.
