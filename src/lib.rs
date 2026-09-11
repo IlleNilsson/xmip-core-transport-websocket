@@ -27,9 +27,11 @@ use transport::Arrived;
 use transport::Directions;
 use transport::Transport;
 use transport::error::{Result, classify, protocol_error};
+use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::socket;
 use transport::wire::{host_of, read_head, with_default_port};
 
+#[derive(Clone)]
 pub struct WebSocketTransport {
     bind: String,
     accept_timeout: Option<Duration>,
@@ -144,47 +146,92 @@ fn split_target(target: &str) -> Result<(&str, &str)> {
     }
 }
 
+impl WebSocketTransport {
+    /// Both ends on this machine: an ephemeral local port, the loopback
+    /// timeout on the accept.
+    #[must_use]
+    pub fn loopback() -> Self {
+        Self::new("127.0.0.1:0").timing_out_after(LOOPBACK_TIMEOUT)
+    }
+}
+
+/// A bound listener waiting for its one upgrade and the frame after it.
+struct Listening {
+    transport: WebSocketTransport,
+    listener: TcpListener,
+    address: String,
+}
+
+impl FarEnd for Listening {
+    fn address(&self) -> &str {
+        &self.address
+    }
+
+    fn take_one(self: Box<Self>) -> Result<Arrived> {
+        self.transport.accept_one(&self.listener)
+    }
+}
+
+impl Loopback for WebSocketTransport {
+    fn far_end(&self) -> Result<Box<dyn FarEnd>> {
+        let (listener, address) = self.bind()?;
+        Ok(Box::new(Listening {
+            transport: self.clone(),
+            listener,
+            address,
+        }))
+    }
+
+    fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {
+        Self::new("127.0.0.1:0").send(&format!("ws://{address}/pingpong"), payload)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The shapes a transport is most likely to change: nothing, one byte,
+    /// every byte value, a run of NULs, high bytes, and line endings alone.
+    fn edge_payloads() -> Vec<(&'static str, Vec<u8>)> {
+        vec![
+            ("empty", Vec::new()),
+            ("one byte", vec![0x2a]),
+            ("every byte", (0..=255).collect()),
+            ("nul run", vec![0; 512]),
+            ("high bytes", vec![0xff; 512]),
+            ("crlf storm", b"\r\n".repeat(400)),
+        ]
+    }
+
     #[test]
     fn websocket_round_trip_carries_the_body_and_the_path() {
-        let receiver = WebSocketTransport::new("127.0.0.1:0");
-        let (listener, address) = receiver.bind().expect("binding");
-
-        let sender = std::thread::spawn(move || {
-            WebSocketTransport::new("127.0.0.1:0")
-                .send(&format!("ws://{address}/feed"), b"<order/>")
-                .expect("sending");
-        });
-
-        let arrived = receiver.accept_one(&listener).expect("accepting");
-        sender.join().expect("the sending thread panicked");
+        let arrived = WebSocketTransport::loopback()
+            .round(b"<order/>")
+            .expect("round");
 
         assert_eq!(arrived.bytes, b"<order/>");
         assert!(arrived.origin_uri.starts_with("ws://127.0.0.1:"));
-        assert!(arrived.origin_uri.ends_with("/feed"));
+        assert!(arrived.origin_uri.ends_with("/pingpong"));
     }
 
     #[test]
     fn websocket_carries_binary_unharmed() {
-        let receiver = WebSocketTransport::new("127.0.0.1:0");
-        let (listener, address) = receiver.bind().expect("binding");
-
-        let sender = std::thread::spawn(move || {
-            WebSocketTransport::new("127.0.0.1:0")
-                .send(
-                    &format!("ws://{address}/feed"),
-                    &[0x00, 0x01, 0x02, 0xfd, 0xfe, 0xff],
-                )
-                .expect("sending");
-        });
-
-        let arrived = receiver.accept_one(&listener).expect("accepting");
-        sender.join().expect("the sending thread panicked");
+        let arrived = WebSocketTransport::loopback()
+            .round(&[0x00, 0x01, 0x02, 0xfd, 0xfe, 0xff])
+            .expect("round");
 
         assert_eq!(arrived.bytes, [0x00, 0x01, 0x02, 0xfd, 0xfe, 0xff]);
+    }
+
+    #[test]
+    fn the_loopback_returns_the_edge_payloads_whole() {
+        let websocket = WebSocketTransport::loopback();
+        assert!(websocket.ceiling().is_none());
+        for (name, bytes) in edge_payloads() {
+            assert!(websocket.refuses(&bytes).is_none(), "{name}");
+            assert_eq!(websocket.round(&bytes).expect(name).bytes, bytes, "{name}");
+        }
     }
 
     #[test]
