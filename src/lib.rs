@@ -169,7 +169,7 @@ impl Loopback for WebSocketTransport {
     }
 
     fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {
-        Self::new("127.0.0.1:0").send(&format!("ws://{address}/pingpong"), payload)
+        Self::new("127.0.0.1:0").send(&format!("ws://{address}/round-trip"), payload)
     }
 }
 
@@ -186,7 +186,7 @@ mod tests {
 
         assert_eq!(arrived.bytes, b"<order/>");
         assert!(arrived.origin_uri.starts_with("ws://127.0.0.1:"));
-        assert!(arrived.origin_uri.ends_with("/pingpong"));
+        assert!(arrived.origin_uri.ends_with("/round-trip"));
     }
 
     #[test]
