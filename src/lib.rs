@@ -20,7 +20,7 @@ pub mod frame;
 pub mod handshake;
 
 use std::io::BufReader;
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::time::Duration;
 
 use transport::Arrived;
@@ -47,7 +47,8 @@ impl WebSocketTransport {
         }
     }
 
-    /// Give up on a connection that stops sending, as `TcpTransport` does.
+    /// Give up on a connection that does not arrive, or stops sending, as
+    /// `TcpTransport` does.
     #[must_use]
     pub const fn timing_out_after(mut self, timeout: Duration) -> Self {
         self.accept_timeout = Some(timeout);
@@ -70,15 +71,10 @@ impl WebSocketTransport {
     /// Where the connection failed, the handshake was malformed, or the frame
     /// could not be read.
     pub fn accept_one(&self, listener: &TcpListener) -> Result<Arrived> {
-        let (mut stream, peer) = listener
-            .accept()
-            .map_err(|e| classify("accepting a connection", &e))?;
-
-        if let Some(timeout) = self.accept_timeout {
-            stream
-                .set_read_timeout(Some(timeout))
-                .map_err(|e| classify("setting the read timeout", &e))?;
-        }
+        // The wait for the connection is bounded as well as the reads. This
+        // did a bare accept until 2026-09-21, so a far end whose near end
+        // never connected waited for good, and a hang has no verdict.
+        let (mut stream, peer) = socket::accept_tcp(listener, self.accept_timeout)?;
 
         let mut reader = BufReader::new(
             stream
@@ -116,8 +112,10 @@ impl Transport for WebSocketTransport {
         let (authority, path) = split_target(target)?;
         let address = with_default_port(authority, 80);
 
-        let mut stream =
-            TcpStream::connect(&address).map_err(|e| classify("connecting to the server", &e))?;
+        // The connect is bounded as well as the reads. This was a bare
+        // connect until 2026-09-21, which waits on the operating system's
+        // schedule, and longer still on a machine out of ephemeral ports.
+        let mut stream = socket::connect_tcp(&address, self.accept_timeout)?;
 
         let mut reader = BufReader::new(
             stream
@@ -149,7 +147,7 @@ fn split_target(target: &str) -> Result<(&str, &str)> {
 
 impl WebSocketTransport {
     /// Both ends on this machine: an ephemeral local port, the loopback
-    /// timeout on the accept.
+    /// timeout on the accept, the connect and the reads.
     #[must_use]
     pub fn loopback() -> Self {
         Self::new("127.0.0.1:0").timing_out_after(LOOPBACK_TIMEOUT)
@@ -169,7 +167,7 @@ impl Loopback for WebSocketTransport {
     }
 
     fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {
-        Self::new("127.0.0.1:0").send(&format!("ws://{address}/round-trip"), payload)
+        Self::loopback().send(&format!("ws://{address}/round-trip"), payload)
     }
 }
 
