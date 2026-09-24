@@ -23,6 +23,7 @@ use std::io::BufReader;
 use std::net::TcpListener;
 use std::time::Duration;
 
+use net::authority::{host_of, with_default_port};
 use transport::Arrived;
 use transport::Directions;
 use transport::Transport;
@@ -30,7 +31,7 @@ use transport::error::{Result, classify, protocol_error};
 use transport::listening::{Accepting, Listening};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::socket;
-use transport::wire::{host_of, read_head, with_default_port};
+use transport::wire::read_head;
 
 #[derive(Clone)]
 pub struct WebSocketTransport {
@@ -155,15 +156,14 @@ impl WebSocketTransport {
 }
 
 impl Accepting for WebSocketTransport {
-    fn take_one(&self, listener: &TcpListener) -> Result<Arrived> {
+    fn take_one(self, listener: &TcpListener) -> Result<Arrived> {
         self.accept_one(listener)
     }
 }
 
 impl Loopback for WebSocketTransport {
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
-        let (listener, address) = self.bind()?;
-        Ok(Box::new(Listening::new(self.clone(), listener, address)))
+        Ok(Box::new(Listening::new(self.clone(), self.bind()?)))
     }
 
     fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {
