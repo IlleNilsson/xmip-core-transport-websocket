@@ -9,7 +9,7 @@
 //! partner speaks.
 //!
 //! ```text
-//! handshake.rs  the opening upgrade, and the SHA-1/base64 it needs
+//! handshake.rs  the opening upgrade, its accept key SHA-1 and base64 by codec
 //! frame.rs      one data frame, masked or not
 //! ```
 //!
