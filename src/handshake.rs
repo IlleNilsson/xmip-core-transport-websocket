@@ -13,8 +13,8 @@ use std::net::TcpStream;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use codec::{base64, sha1};
+use net::head::header;
 use transport::error::{Result, classify, protocol_error};
-use transport::wire::header;
 
 /// The GUID RFC 6455 fixes for the accept computation.
 const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
