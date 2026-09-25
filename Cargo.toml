@@ -20,7 +20,8 @@ path = "src/lib.rs"
 # otherwise, which is what lets this build on every target in
 # deployment-model.md without a cross-compilation story.
 transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main" }
-# An authority read as a URI writes it: the host, and the default port.
+# An authority read as a URI writes it: the host, and the default port;
+# and the head of the opening handshake (`net::head`).
 net = { package = "xmip-core-library-net", git = "https://github.com/IlleNilsson/xmip-core-library-net", branch = "main" }
 # The estate's encoding primitives: the accept key: SHA-1 written in base 64.
 codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }

@@ -24,6 +24,7 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 use net::authority::{host_of, with_default_port};
+use net::head::read_head;
 use transport::Arrived;
 use transport::Directions;
 use transport::Transport;
@@ -31,7 +32,6 @@ use transport::error::{Result, classify, protocol_error};
 use transport::listening::{Accepting, Listening};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::socket;
-use transport::wire::read_head;
 
 #[derive(Clone)]
 pub struct WebSocketTransport {
