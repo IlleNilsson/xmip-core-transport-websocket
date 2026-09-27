@@ -7,10 +7,10 @@
 //! a request/response caller both want.
 
 use std::io::{Read, Write};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use transport::error::{Result, classify, protocol_error};
-use transport::wire::MAX_BODY;
+use net::MAX_BODY;
+use transport::ceiling;
+use transport::error::{Result, classify};
 
 /// FIN set, opcode 2 (binary).
 const FIN_BINARY: u8 = 0x82;
@@ -43,7 +43,9 @@ pub fn write(stream: &mut impl Write, payload: &[u8], masked: bool) -> Result<()
     }
 
     if masked {
-        let key = mask_key();
+        // RFC 6455 section 5.3: a fresh key a frame, from a strong source of
+        // entropy, so a script cannot choose the bytes a proxy sees.
+        let key: [u8; 4] = codec::random::array();
         frame.extend_from_slice(&key);
         frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ key[i % 4]));
     } else {
@@ -104,28 +106,13 @@ fn payload_length(reader: &mut impl Read, seven: u8) -> Result<usize> {
         other => usize::from(other),
     };
 
-    if length > MAX_BODY {
-        return Err(protocol_error(format!(
-            "a frame of {length} bytes, over the {MAX_BODY} byte limit"
-        )));
-    }
+    ceiling::within(length, MAX_BODY, "Xmip reads in one frame")?;
 
     Ok(length)
 }
 
 fn read_exact(reader: &mut impl Read, buffer: &mut [u8], step: &str) -> Result<()> {
     reader.read_exact(buffer).map_err(|e| classify(step, &e))
-}
-
-/// Four bytes of non-secret masking key from the clock. Masking exists to keep
-/// intermediaries from mistaking payload for framing, not to hide anything, so
-/// it need only vary — and std carries no RNG.
-fn mask_key() -> [u8; 4] {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0x1234_5678, |elapsed| elapsed.subsec_nanos());
-
-    nanos.to_be_bytes()
 }
 
 #[cfg(test)]
