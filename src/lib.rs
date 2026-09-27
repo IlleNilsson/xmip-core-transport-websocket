@@ -30,6 +30,7 @@ use transport::Configured;
 use transport::Directions;
 use transport::Transport;
 use transport::error::{Result, classify, protocol_error};
+use transport::kept::Kept;
 use transport::listening::{Accepting, Listening};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::socket;
@@ -39,6 +40,8 @@ use xcore::settings::{Applies, Kind, Presence, Read, Setting, Settings};
 pub struct WebSocketTransport {
     bind: String,
     accept_timeout: Option<Duration>,
+    /// The listener the first receive binds, and every receive takes from.
+    receiving: Kept<TcpListener>,
 }
 
 impl WebSocketTransport {
@@ -47,6 +50,7 @@ impl WebSocketTransport {
         Self {
             bind: bind.into(),
             accept_timeout: None,
+            receiving: Kept::new(),
         }
     }
 
@@ -105,10 +109,10 @@ impl Transport for WebSocketTransport {
         Directions::BOTH
     }
 
+    /// One message, from the listener the first receive bound and kept.
     fn receive(&self) -> Result<Vec<Arrived>> {
-        let (listener, _) = self.bind()?;
-
-        Ok(vec![self.accept_one(&listener)?])
+        let listener = self.receiving.bound(|| self.bind())?;
+        Ok(vec![self.accept_one(listener)?])
     }
 
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
@@ -203,6 +207,16 @@ mod tests {
     use super::*;
     use transport::payload::edge_payloads;
     use xcore::settings::Given;
+
+    #[test]
+    fn every_receive_takes_from_the_listener_the_first_bound() {
+        let receiver = WebSocketTransport::loopback();
+        receiver.receiving.bound(|| receiver.bind()).expect("bound");
+        let address = receiver.receiving.address().expect("address");
+        transport::kept::held_across_receives(&receiver, address, 5, |at, payload| {
+            WebSocketTransport::loopback().send_to(at, payload)
+        });
+    }
 
     #[test]
     fn websocket_declares_its_settings_and_reads_through_them() {
