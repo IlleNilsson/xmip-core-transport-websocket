@@ -10,9 +10,8 @@
 
 use std::io::Write;
 use std::net::TcpStream;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use codec::{base64, sha1};
+use codec::{base64, random, sha1};
 use net::head::header;
 use transport::error::{Result, classify, protocol_error};
 
@@ -49,10 +48,11 @@ pub fn client_key_of(head: &[String]) -> Result<String> {
         .ok_or_else(|| protocol_error("a websocket request with no Sec-WebSocket-Key"))
 }
 
-/// A fresh client key: sixteen bytes, base64-encoded, as RFC 6455 asks.
+/// A fresh client key: sixteen random bytes, base64-encoded, as RFC 6455
+/// section 4.1 asks.
 #[must_use]
 pub fn client_key() -> String {
-    base64::encode(&pseudo_random(16))
+    base64::encode(&random::array::<16>())
 }
 
 /// Write the client's upgrade request.
@@ -118,26 +118,6 @@ pub fn accept(stream: &mut TcpStream, client_key: &str) -> Result<()> {
 fn write_all(stream: &mut TcpStream, bytes: &[u8], step: &str) -> Result<()> {
     stream.write_all(bytes).map_err(|e| classify(step, &e))?;
     stream.flush().map_err(|e| classify(step, &e))
-}
-
-/// Sixteen or four bytes of non-secret nonce, from the clock through an LCG. Not
-/// cryptographic randomness — a masking key and a handshake nonce need to vary,
-/// not to be unguessable, and the std library carries no RNG.
-fn pseudo_random(n: usize) -> Vec<u8> {
-    let mut state = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0x9E37_79B9_7F4A_7C15, |elapsed| {
-            elapsed.as_secs() ^ u64::from(elapsed.subsec_nanos())
-        });
-
-    (0..n)
-        .map(|_| {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            (state >> 33).to_le_bytes()[0]
-        })
-        .collect()
 }
 
 #[cfg(test)]
