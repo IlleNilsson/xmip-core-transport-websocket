@@ -7,45 +7,32 @@
 //! guards a protocol handshake, not a secret; its cryptographic weakness is
 //! irrelevant to that job, which is the same reason RFC 6455 still
 //! specifies it. Until 2026-09-24 both were written here by hand.
+//!
+//! The request and its `101` are HTTP/1.1, written and read by `net::http`
+//! like every other: until 2026-09-28 this file wrote both by hand, read
+//! the path off the request line itself and took any status line with
+//! `101` anywhere in it for a switch.
 
-use std::io::Write;
-use std::net::TcpStream;
+use std::io::{BufRead, Write};
 
 use codec::{base64, random, sha1};
-use net::head::header;
-use transport::error::{Result, classify, protocol_error};
+use net::http::{Request, Response, read_request, read_response, write_request, write_response};
+use transport::error::{Result, protocol_error};
 
 /// The GUID RFC 6455 fixes for the accept computation.
 const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
+/// The status a server switches protocols with.
+const SWITCHING: u16 = 101;
+
 /// The accept token a server returns for a client's key: base64 of the SHA-1 of
 /// the key concatenated with the fixed GUID.
 #[must_use]
-pub fn accept_key(client_key: &str) -> String {
+fn accept_key(client_key: &str) -> String {
     let mut input = client_key.as_bytes().to_vec();
     input.extend_from_slice(WS_GUID.as_bytes());
 
     base64::encode(&sha1::digest(&input))
-}
-
-/// The path from the request line: `GET /feed HTTP/1.1`.
-#[must_use]
-pub fn request_path(head: &[String]) -> String {
-    head.first()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .unwrap_or("/")
-        .to_string()
-}
-
-/// The client's key out of the request headers.
-///
-/// # Errors
-///
-/// Where the request carried no `Sec-WebSocket-Key`.
-pub fn client_key_of(head: &[String]) -> Result<String> {
-    header(head, "sec-websocket-key")
-        .map(str::to_string)
-        .ok_or_else(|| protocol_error("a websocket request with no Sec-WebSocket-Key"))
 }
 
 /// A fresh client key: sixteen random bytes, base64-encoded, as RFC 6455
@@ -55,38 +42,40 @@ pub fn client_key() -> String {
     base64::encode(&random::array::<16>())
 }
 
-/// Write the client's upgrade request.
+/// Write the client's upgrade request for `path` at `host` with `key`.
 ///
 /// # Errors
 ///
 /// Where the request could not be written.
-pub fn send_request(stream: &mut TcpStream, host: &str, path: &str, key: &str) -> Result<()> {
-    let request = format!(
-        "GET {path} HTTP/1.1\r\n\
-         Host: {host}\r\n\
-         Upgrade: websocket\r\n\
-         Connection: Upgrade\r\n\
-         Sec-WebSocket-Key: {key}\r\n\
-         Sec-WebSocket-Version: 13\r\n\r\n"
-    );
+pub fn send_request(writer: &mut impl Write, host: &str, path: &str, key: &str) -> Result<()> {
+    let request = Request::new("GET", path)
+        .header("Host", host)
+        .header("Upgrade", "websocket")
+        .header("Connection", "Upgrade")
+        .header("Sec-WebSocket-Key", key)
+        .header("Sec-WebSocket-Version", "13");
 
-    write_all(stream, request.as_bytes(), "sending the upgrade request")
+    Ok(write_request(writer, &request)?)
 }
 
-/// Check the server accepted with the token our key implies.
+/// Read the server's answer, and check it switched with the token our key
+/// implies.
 ///
 /// # Errors
 ///
-/// Where the response was not `101`, or the accept token did not match.
-pub fn verify_response(head: &[String], key: &str) -> Result<()> {
-    let status = head.first().map_or("", String::as_str);
-    if !status.contains("101") {
+/// Where the answer could not be read, was not `101`, or its accept token
+/// did not match.
+pub fn verify_response(reader: &mut impl BufRead, key: &str) -> Result<()> {
+    let answer = read_response(reader)?;
+    if answer.status != SWITCHING {
         return Err(protocol_error(format!(
-            "the server did not switch: {status}"
+            "the server did not switch: {} {}",
+            answer.status, answer.reason
         )));
     }
 
-    let accept = header(head, "sec-websocket-accept")
+    let accept = answer
+        .header_value("sec-websocket-accept")
         .ok_or_else(|| protocol_error("a 101 with no Sec-WebSocket-Accept"))?;
 
     if accept != accept_key(key) {
@@ -98,26 +87,27 @@ pub fn verify_response(head: &[String], key: &str) -> Result<()> {
     Ok(())
 }
 
-/// Write the server's `101 Switching Protocols`.
+/// Read a client's upgrade request, and answer it with the server's
+/// `101 Switching Protocols`: the request's target, path and query as it
+/// travelled.
 ///
 /// # Errors
 ///
-/// Where the response could not be written.
-pub fn accept(stream: &mut TcpStream, client_key: &str) -> Result<()> {
-    let response = format!(
-        "HTTP/1.1 101 Switching Protocols\r\n\
-         Upgrade: websocket\r\n\
-         Connection: Upgrade\r\n\
-         Sec-WebSocket-Accept: {}\r\n\r\n",
-        accept_key(client_key)
-    );
+/// Where the request could not be read, carried no `Sec-WebSocket-Key`,
+/// or the answer could not be written.
+pub fn accept(reader: &mut impl BufRead, writer: &mut impl Write) -> Result<String> {
+    let request = read_request(reader)?
+        .ok_or_else(|| protocol_error("the connection closed before an upgrade request"))?;
+    let key = request
+        .header_value("sec-websocket-key")
+        .ok_or_else(|| protocol_error("a websocket request with no Sec-WebSocket-Key"))?;
+    let switching = Response::new(SWITCHING)
+        .header("Upgrade", "websocket")
+        .header("Connection", "Upgrade")
+        .header("Sec-WebSocket-Accept", &accept_key(key));
 
-    write_all(stream, response.as_bytes(), "accepting the upgrade")
-}
-
-fn write_all(stream: &mut TcpStream, bytes: &[u8], step: &str) -> Result<()> {
-    stream.write_all(bytes).map_err(|e| classify(step, &e))?;
-    stream.flush().map_err(|e| classify(step, &e))
+    write_response(writer, &switching)?;
+    Ok(request.target())
 }
 
 #[cfg(test)]
@@ -130,6 +120,32 @@ mod tests {
         assert_eq!(
             accept_key("dGhlIHNhbXBsZSBub25jZQ=="),
             "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+        );
+    }
+
+    #[test]
+    fn the_handshake_is_one_http_request_and_its_101() {
+        let key = client_key();
+        let mut request = Vec::new();
+        send_request(&mut request, "feed.example", "/feed?x=1", &key).expect("request");
+
+        let mut answer = Vec::new();
+        let path = accept(&mut &request[..], &mut answer).expect("accepted");
+        assert_eq!(path, "/feed?x=1");
+        assert!(answer.starts_with(b"HTTP/1.1 101 Switching Protocols"));
+        verify_response(&mut &answer[..], &key).expect("switched");
+    }
+
+    #[test]
+    fn an_answer_that_does_not_switch_is_refused_even_saying_101() {
+        let refused = verify_response(&mut &b"HTTP/1.1 200 101\r\n\r\n"[..], "key")
+            .expect_err("not a switch");
+        assert!(refused.message.contains("did not switch"), "{refused}");
+        let mut answer = Vec::new();
+        write_response(&mut answer, &Response::new(SWITCHING)).expect("written");
+        assert!(
+            verify_response(&mut &answer[..], "key").is_err(),
+            "no accept"
         );
     }
 }
