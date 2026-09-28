@@ -9,7 +9,7 @@
 use std::io::{Read, Write};
 
 use net::MAX_BODY;
-use transport::ceiling;
+use net::ceiling;
 use transport::error::{Result, classify};
 
 /// FIN set, opcode 2 (binary).

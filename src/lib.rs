@@ -23,18 +23,25 @@ use std::io::BufReader;
 use std::net::TcpListener;
 use std::time::Duration;
 
-use net::authority::{host_of, with_default_port};
-use net::head::read_head;
+use net::{Endpoint, Schemes};
 use transport::Arrived;
 use transport::Configured;
 use transport::Directions;
 use transport::Transport;
-use transport::error::{Result, classify, protocol_error};
+use transport::error::{Result, classify};
 use transport::kept::Kept;
 use transport::listening::{Accepting, Listening};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::socket;
 use xcore::settings::{Applies, Kind, Presence, Read, Setting, Settings};
+
+/// The schemes a target is written in: `ws://`, which is `http://` for the
+/// opening handshake, and `wss://`, which is `https://` and refused, this
+/// transport speaking no TLS.
+const SCHEMES: Schemes = Schemes {
+    plain: &["ws"],
+    secure: &["wss"],
+};
 
 #[derive(Clone)]
 pub struct WebSocketTransport {
@@ -89,10 +96,7 @@ impl WebSocketTransport {
                 .map_err(|e| classify("cloning the connection", &e))?,
         );
 
-        let head = read_head(&mut reader)?;
-        let path = handshake::request_path(&head);
-        let key = handshake::client_key_of(&head)?;
-        handshake::accept(&mut stream, &key)?;
+        let path = handshake::accept(&mut reader, &mut stream)?;
 
         let payload = frame::read(&mut reader)?;
 
@@ -116,8 +120,8 @@ impl Transport for WebSocketTransport {
     }
 
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
-        let (authority, path) = split_target(target)?;
-        let address = with_default_port(authority, 80);
+        let endpoint = Endpoint::parse_under(target, &SCHEMES)?.plain()?;
+        let address = endpoint.address();
 
         // The connect is bounded as well as the reads. This was a bare
         // connect until 2026-09-21, which waits on the operating system's
@@ -131,10 +135,8 @@ impl Transport for WebSocketTransport {
         );
 
         let key = handshake::client_key();
-        handshake::send_request(&mut stream, host_of(authority), path, &key)?;
-
-        let head = read_head(&mut reader)?;
-        handshake::verify_response(&head, &key)?;
+        handshake::send_request(&mut stream, &endpoint.authority(), endpoint.path(), &key)?;
+        handshake::verify_response(&mut reader, &key)?;
 
         frame::write(&mut stream, bytes, true)
     }
@@ -162,18 +164,6 @@ impl Configured for WebSocketTransport {
             Some(timeout) => transport.timing_out_after(timeout),
             None => transport,
         })
-    }
-}
-
-/// Split `ws://host:port/path` into its authority and path.
-fn split_target(target: &str) -> Result<(&str, &str)> {
-    let rest = target
-        .strip_prefix("ws://")
-        .ok_or_else(|| protocol_error(format!("not a ws:// target: {target}")))?;
-
-    match rest.find('/') {
-        Some(cut) => Ok((&rest[..cut], &rest[cut..])),
-        None => Ok((rest, "/")),
     }
 }
 
@@ -268,6 +258,10 @@ mod tests {
 
     #[test]
     fn a_target_without_ws_scheme_is_refused() {
-        assert!(split_target("http://host/x").is_err());
+        assert!(Endpoint::parse_under("http://host/x", &SCHEMES).is_err());
+        let refused = Endpoint::parse_under("wss://host/x", &SCHEMES)
+            .and_then(Endpoint::plain)
+            .expect_err("no TLS here");
+        assert!(refused.message.contains("TLS"), "{refused}");
     }
 }
