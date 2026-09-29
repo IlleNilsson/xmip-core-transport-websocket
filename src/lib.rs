@@ -6,7 +6,7 @@
 //! switch protocols, and from then on it is framed messages over the same TCP
 //! connection. Xmip drives one message each way and closes — a request/response
 //! shape, like http, but over the WebSocket framing a browser or a streaming
-//! partner speaks.
+//! Party speaks.
 //!
 //! ```text
 //! handshake.rs  the opening upgrade, its accept key SHA-1 and base64 by codec
