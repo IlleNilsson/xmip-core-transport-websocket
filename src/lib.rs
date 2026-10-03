@@ -15,6 +15,10 @@
 //!
 //! Standard library only, hand-rolled crypto and framing included, so this
 //! transport cross-compiles with every other one — see `handshake.rs`.
+//!
+//! **Acceptance is at-most-once here** ([`AT_MOST_ONCE`]): the sender writes
+//! its frame and closes, and nothing is said back on the connection, so it
+//! is never told how the receive cycle ended. Each frame arrives whole.
 
 pub mod frame;
 pub mod handshake;
@@ -24,7 +28,6 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 use net::{Endpoint, Schemes};
-use transport::Arrived;
 use transport::Configured;
 use transport::Directions;
 use transport::Transport;
@@ -33,6 +36,7 @@ use transport::kept::Kept;
 use transport::listening::{Accepting, Listening};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::socket;
+use transport::{Acknowledgement, Arrived, Taken};
 use xcore::settings::{Applies, Kind, Presence, Read, Setting, Settings};
 
 /// The schemes a target is written in: `ws://`, which is `http://` for the
@@ -42,6 +46,10 @@ const SCHEMES: Schemes = Schemes {
     plain: &["ws"],
     secure: &["wss"],
 };
+
+/// Why a WebSocket frame cannot be acknowledged after the receive cycle.
+pub const AT_MOST_ONCE: &str = "a WebSocket frame is answered with nothing: the sender writes \
+                                it and closes";
 
 #[derive(Clone)]
 pub struct WebSocketTransport {
@@ -78,7 +86,8 @@ impl WebSocketTransport {
         socket::bind_tcp(&self.bind)
     }
 
-    /// Take one connection, complete the upgrade, and read one frame.
+    /// Take one connection, complete the upgrade, and read one frame, whole.
+    /// Acceptance is at-most-once ([`AT_MOST_ONCE`]).
     ///
     /// # Errors
     ///
@@ -100,7 +109,11 @@ impl WebSocketTransport {
 
         let payload = frame::read(&mut reader)?;
 
-        Ok(Arrived::new(format!("ws://{peer}{path}"), payload))
+        Ok(Arrived::whole(
+            format!("ws://{peer}{path}"),
+            payload,
+            Acknowledgement::at_most_once(AT_MOST_ONCE),
+        ))
     }
 }
 
@@ -113,7 +126,13 @@ impl Transport for WebSocketTransport {
         Directions::BOTH
     }
 
+    fn arrivals(&self) -> transport::Arrivals {
+        transport::Arrivals::Unordered("each connection carries one frame of its own")
+    }
+
     /// One message, from the listener the first receive bound and kept.
+    /// Acceptance is at-most-once here: nothing is said back on the
+    /// connection ([`AT_MOST_ONCE`]).
     fn receive(&self) -> Result<Vec<Arrived>> {
         let listener = self.receiving.bound(|| self.bind())?;
         Ok(vec![self.accept_one(listener)?])
@@ -177,8 +196,8 @@ impl WebSocketTransport {
 }
 
 impl Accepting for WebSocketTransport {
-    fn take_one(self, listener: &TcpListener) -> Result<Arrived> {
-        self.accept_one(listener)
+    fn take_one(self, listener: &TcpListener) -> Result<Taken> {
+        self.accept_one(listener)?.taken()
     }
 }
 
@@ -254,6 +273,19 @@ mod tests {
             assert!(websocket.refuses(&bytes).is_none(), "{name}");
             assert_eq!(websocket.round(&bytes).expect(name).bytes, bytes, "{name}");
         }
+    }
+
+    #[test]
+    fn a_frame_says_it_is_at_most_once() {
+        let receiver = WebSocketTransport::loopback();
+        let (listener, address) = receiver.bind().expect("bound");
+        let sender = std::thread::spawn(move || {
+            WebSocketTransport::loopback().send(&format!("ws://{address}/one"), b"frame")
+        });
+        let arrived = receiver.accept_one(&listener).expect("accepted");
+        sender.join().expect("thread").expect("sent");
+        assert!(!arrived.defers(), "nothing is said back");
+        assert_eq!(arrived.taken().expect("taken").bytes, b"frame");
     }
 
     #[test]

@@ -15,6 +15,13 @@ A Receive Location keeps its listener, bound on the first receive (`transport::k
 
 The opening handshake is HTTP/1.1, written and read by `net::http` in [xmip-core-library-net](https://github.com/IlleNilsson/xmip-core-library-net), and the `ws://` target is read as a `net::Endpoint` under this technology's schemes (`wss://` refused, there being no TLS here). Until 2026-09-28 the handshake wrote its request and its `101` by hand, read the path off the request line itself and took any status line with `101` in it for a switch, and the target was cut after `ws://` by hand.
 
+## Acknowledgement
+
+Acceptance is at-most-once here. The sender writes its frame and closes, and
+nothing is said back on the connection, so it is never told how the receive
+cycle ended and a crash before the Stream is durable loses it. Each frame
+arrives whole.
+
 ## Toolchain
 
 `rust-toolchain.toml` pins the toolchain for the whole estate. Do not change it
