@@ -88,14 +88,14 @@ pub fn verify_response(reader: &mut impl BufRead, key: &str) -> Result<()> {
 }
 
 /// Read a client's upgrade request, and answer it with the server's
-/// `101 Switching Protocols`: the request's target, path and query as it
-/// travelled.
+/// `101 Switching Protocols`: the request itself, its target — path and
+/// query as it travelled — and its headers, which say who is calling.
 ///
 /// # Errors
 ///
 /// Where the request could not be read, carried no `Sec-WebSocket-Key`,
 /// or the answer could not be written.
-pub fn accept(reader: &mut impl BufRead, writer: &mut impl Write) -> Result<String> {
+pub fn accept(reader: &mut impl BufRead, writer: &mut impl Write) -> Result<Request> {
     let request = read_request(reader)?
         .ok_or_else(|| protocol_error("the connection closed before an upgrade request"))?;
     let key = request
@@ -107,7 +107,7 @@ pub fn accept(reader: &mut impl BufRead, writer: &mut impl Write) -> Result<Stri
         .header("Sec-WebSocket-Accept", &accept_key(key));
 
     write_response(writer, &switching)?;
-    Ok(request.target())
+    Ok(request)
 }
 
 #[cfg(test)]
@@ -130,8 +130,8 @@ mod tests {
         send_request(&mut request, "feed.example", "/feed?x=1", &key).expect("request");
 
         let mut answer = Vec::new();
-        let path = accept(&mut &request[..], &mut answer).expect("accepted");
-        assert_eq!(path, "/feed?x=1");
+        let upgrade = accept(&mut &request[..], &mut answer).expect("accepted");
+        assert_eq!(upgrade.target(), "/feed?x=1");
         assert!(answer.starts_with(b"HTTP/1.1 101 Switching Protocols"));
         verify_response(&mut &answer[..], &key).expect("switched");
     }

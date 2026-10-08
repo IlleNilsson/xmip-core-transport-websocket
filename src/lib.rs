@@ -28,6 +28,7 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 use net::{Endpoint, Schemes};
+use transport::ArrivalIdentity;
 use transport::Configured;
 use transport::Directions;
 use transport::Transport;
@@ -36,7 +37,7 @@ use transport::kept::Kept;
 use transport::listening::{Accepting, Listening};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::socket;
-use transport::{Acknowledgement, Arrived, Taken};
+use transport::{Acknowledgement, Arrived, Headers, Taken};
 use xcore::settings::{Applies, Kind, Presence, Read, Setting, Settings};
 
 /// The schemes a target is written in: `ws://`, which is `http://` for the
@@ -105,15 +106,19 @@ impl WebSocketTransport {
                 .map_err(|e| classify("cloning the connection", &e))?,
         );
 
-        let path = handshake::accept(&mut reader, &mut stream)?;
+        let upgrade = handshake::accept(&mut reader, &mut stream)?;
 
         let payload = frame::read(&mut reader)?;
 
+        // Who is calling is said on the upgrade request: the peer it came
+        // from and its headers, HTTP's.
         Ok(Arrived::whole(
-            format!("ws://{peer}{path}"),
+            format!("ws://{peer}{}", upgrade.target()),
             payload,
             Acknowledgement::at_most_once(AT_MOST_ONCE),
-        ))
+        )
+        .with_headers(Headers::of("http").text(upgrade.headers))
+        .from_peer(peer))
     }
 }
 
@@ -202,6 +207,10 @@ impl Accepting for WebSocketTransport {
 }
 
 impl Loopback for WebSocketTransport {
+    fn arrival_identity(&self) -> ArrivalIdentity {
+        ArrivalIdentity::PEER
+    }
+
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
         Ok(Box::new(Listening::new(self.clone(), self.bind()?)))
     }
