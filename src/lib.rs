@@ -135,6 +135,10 @@ impl Transport for WebSocketTransport {
         transport::Arrivals::Unordered("each connection carries one frame of its own")
     }
 
+    fn waiting(&self) -> transport::Waiting {
+        transport::Waiting::Waits("the accept waits for a connection")
+    }
+
     /// One message, from the listener the first receive bound and kept.
     /// Acceptance is at-most-once here: nothing is said back on the
     /// connection ([`AT_MOST_ONCE`]).
