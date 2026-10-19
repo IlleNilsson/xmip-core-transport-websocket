@@ -142,12 +142,16 @@ impl Transport for WebSocketTransport {
     /// One message, from the listener the first receive bound and kept.
     /// Acceptance is at-most-once here: nothing is said back on the
     /// connection ([`AT_MOST_ONCE`]).
-    fn receive(&self) -> Result<Vec<Arrived>> {
+    fn receive_up_to(&self, _most: usize) -> Result<Vec<Arrived>> {
         let listener = self.receiving.bound(|| self.bind())?;
         Ok(vec![self.accept_one(listener)?])
     }
 
-    fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
+    fn sending(&self) -> transport::Sending {
+        transport::Sending::Streamed("one frame carries the body, its length first, as it is read")
+    }
+
+    fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
         let endpoint = Endpoint::parse_under(target, &SCHEMES)?.plain()?;
         let address = endpoint.address();
 
@@ -166,7 +170,7 @@ impl Transport for WebSocketTransport {
         handshake::send_request(&mut stream, &endpoint.authority(), endpoint.path(), &key)?;
         handshake::verify_response(&mut reader, &key)?;
 
-        frame::write(&mut stream, bytes, true)
+        frame::write(&mut stream, &outgoing, true)
     }
 }
 
