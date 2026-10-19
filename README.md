@@ -20,7 +20,10 @@ The opening handshake is HTTP/1.1, written and read by `net::http` in [xmip-core
 Acceptance is at-most-once here. The sender writes its frame and closes, and
 nothing is said back on the connection, so it is never told how the receive
 cycle ended and a crash before the Stream is durable loses it. Each frame
-arrives whole.
+arrives whole. A send writes its frame's length first, the Message's being
+known before its first byte, then the Message masked as it is read from the
+Ledger, a piece at a time, never whole in memory (`Sending::Streamed`,
+2026-10-19).
 
 ## Toolchain
 
