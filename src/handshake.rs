@@ -89,7 +89,7 @@ pub fn verify_response(reader: &mut impl BufRead, key: &str) -> Result<()> {
 
 /// Read a client's upgrade request, and answer it with the server's
 /// `101 Switching Protocols`: the request itself, its target — path and
-/// query as it travelled — and its headers, which say who is calling.
+/// query as it traveled — and its headers, which say who is calling.
 ///
 /// # Errors
 ///
