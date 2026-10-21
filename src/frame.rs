@@ -1,10 +1,12 @@
 //! One WebSocket data frame, written and read.
 //!
 //! RFC 6455 framing, the subset Xmip needs: a single final binary frame per
-//! Stream. A client MUST mask; a server MUST NOT. Control frames (ping, close)
-//! are not written here and a received one is not expected — the exchange is one
-//! frame each way and the connection is dropped after, which the playground and
-//! a request/response caller both want.
+//! Stream. A client MUST mask; a server MUST NOT. A connection is kept for
+//! frame after frame, so the control frames a peer may send on it are told
+//! apart from data ([`Received`]): a ping is answered with its pong and a
+//! close with a close ([`control`], RFC 6455 section 5.5). Until 2026-10-21
+//! every frame came on a connection of its own, dropped after it, and a
+//! control frame was read as data.
 
 use std::io::{self, BufWriter, Read, Write};
 
@@ -15,7 +17,28 @@ use transport::error::{Result, classify};
 
 /// FIN set, opcode 2 (binary).
 const FIN_BINARY: u8 = 0x82;
+/// FIN set, the bit every frame written here carries.
+const FIN: u8 = 0x80;
+/// The opcodes of the control frames (RFC 6455 section 5.5).
+pub const CLOSE: u8 = 0x8;
+pub const PING: u8 = 0x9;
+pub const PONG: u8 = 0xA;
+/// The most a control frame carries (RFC 6455 section 5.5).
+const MAX_CONTROL: usize = 125;
 const MASK_BIT: u8 = 0x80;
+
+/// What one frame said.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Received {
+    /// A data frame's payload, unmasked.
+    Data(Vec<u8>),
+    /// A ping, and what its pong must carry back.
+    Ping(Vec<u8>),
+    /// A pong: nothing to do.
+    Pong,
+    /// The peer closes the connection.
+    Close,
+}
 /// The 7-bit length field's two escape values: read a 16- or 64-bit length next.
 const LEN_16: u8 = 126;
 const LEN_64: u8 = 127;
@@ -92,15 +115,37 @@ impl<W: Write> Write for Masked<'_, W> {
     }
 }
 
-/// Read one frame's payload, unmasking if the sender masked it.
+/// Write a control frame with `opcode` and `payload`, unmasked, as a server
+/// writes: the pong to a ping, the close that answers a close.
+///
+/// # Errors
+///
+/// Where the payload is over what a control frame carries, or the frame
+/// could not be written.
+pub fn control(stream: &mut impl Write, opcode: u8, payload: &[u8]) -> Result<()> {
+    let length = u8::try_from(payload.len())
+        .ok()
+        .filter(|&length| usize::from(length) <= MAX_CONTROL)
+        .ok_or_else(|| transport::error::protocol_error("a control frame over 125 bytes"))?;
+    let mut frame = vec![FIN | opcode, length];
+    frame.extend_from_slice(payload);
+    stream
+        .write_all(&frame)
+        .and_then(|()| stream.flush())
+        .map_err(|e| classify("writing a websocket control frame", &e))
+}
+
+/// Read one frame, unmasking its payload if the sender masked it: a data
+/// frame's payload, or the control frame it is.
 ///
 /// # Errors
 ///
 /// Where the frame could not be read, or claimed a payload over [`MAX_BODY`].
-pub fn read(reader: &mut impl Read) -> Result<Vec<u8>> {
+pub fn read(reader: &mut impl Read) -> Result<Received> {
     let mut prefix = [0u8; 2];
     read_exact(reader, &mut prefix, "reading a frame header")?;
 
+    let opcode = prefix[0] & 0x0f;
     let masked = prefix[1] & MASK_BIT != 0;
     let length = payload_length(reader, prefix[1] & 0x7f)?;
 
@@ -118,7 +163,12 @@ pub fn read(reader: &mut impl Read) -> Result<Vec<u8>> {
         }
     }
 
-    Ok(payload)
+    Ok(match opcode {
+        CLOSE => Received::Close,
+        PING => Received::Ping(payload),
+        PONG => Received::Pong,
+        _ => Received::Data(payload),
+    })
 }
 
 /// The declared payload length, reading the 16- or 64-bit extension where the
@@ -151,13 +201,37 @@ fn read_exact(reader: &mut impl Read, buffer: &mut [u8], step: &str) -> Result<(
 mod tests {
     use super::*;
 
+    /// The data frame `reader` holds next.
+    fn data(reader: &mut impl Read) -> Vec<u8> {
+        match read(reader).expect("reading") {
+            Received::Data(payload) => payload,
+            other => panic!("not data: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_ping_a_pong_and_a_close_are_told_from_data() {
+        let mut wire = Vec::new();
+        control(&mut wire, PING, b"are you there").expect("ping");
+        control(&mut wire, PONG, b"").expect("pong");
+        control(&mut wire, CLOSE, b"").expect("close");
+        let mut cursor = std::io::Cursor::new(wire);
+        assert_eq!(
+            read(&mut cursor).expect("ping"),
+            Received::Ping(b"are you there".to_vec())
+        );
+        assert_eq!(read(&mut cursor).expect("pong"), Received::Pong);
+        assert_eq!(read(&mut cursor).expect("close"), Received::Close);
+        assert!(control(&mut Vec::new(), PING, &[0; 126]).is_err());
+    }
+
     #[test]
     fn a_masked_frame_reads_back_as_it_was_written() {
         let mut wire = Vec::new();
         write(&mut wire, &Outgoing::held(b"ping over ws"), true).expect("writing");
 
         let mut cursor = std::io::Cursor::new(wire);
-        assert_eq!(read(&mut cursor).expect("reading"), b"ping over ws");
+        assert_eq!(data(&mut cursor), b"ping over ws");
     }
 
     #[test]
@@ -166,10 +240,7 @@ mod tests {
         write(&mut wire, &Outgoing::held(&[0x00, 0x01, 0xfe, 0xff]), false).expect("writing");
 
         let mut cursor = std::io::Cursor::new(wire);
-        assert_eq!(
-            read(&mut cursor).expect("reading"),
-            [0x00, 0x01, 0xfe, 0xff]
-        );
+        assert_eq!(data(&mut cursor), [0x00, 0x01, 0xfe, 0xff]);
     }
 
     #[test]
@@ -180,7 +251,7 @@ mod tests {
         write(&mut wire, &Outgoing::held(&payload), true).expect("writing");
 
         let mut cursor = std::io::Cursor::new(wire);
-        assert_eq!(read(&mut cursor).expect("reading"), payload);
+        assert_eq!(data(&mut cursor), payload);
     }
 
     #[test]
@@ -194,6 +265,6 @@ mod tests {
         write(&mut wire, &outgoing, true).expect("writing");
 
         let mut cursor = std::io::Cursor::new(wire);
-        assert_eq!(read(&mut cursor).expect("reading"), payload);
+        assert_eq!(data(&mut cursor), payload);
     }
 }
