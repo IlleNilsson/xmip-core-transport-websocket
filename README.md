@@ -11,13 +11,15 @@ a protocol. The head a line-oriented protocol reads — lines, then a blank
 line — left it on 2026-09-25 for `net::head` in
 [xmip-core-library-net](https://github.com/IlleNilsson/xmip-core-library-net).
 
-A Receive Location keeps its listener, bound on the first receive (`transport::kept::Kept`): a peer that connects between two receives is queued and taken by the next, where until 2026-09-27 each receive bound a listener of its own and a peer between receives was refused.
+A Receive Location keeps its listener, bound on the first receive: a peer that connects between two receives is queued and taken by the next, where until 2026-09-27 each receive bound a listener of its own and a peer between receives was refused.
+
+A connection is upgraded once and kept for every frame after. A Send Location keeps the upgraded connection to each target, its address and path (`transport::Pool`), one data frame a Message; a Receive Location keeps its callers' connections beside the listener (`transport::serving::Serving`, `src/caller.rs`), the upgrade the first turn on each and every frame after it one receive's turn, from whichever caller sends first. A ping between frames is answered with its pong and a close with a close, which ends the connection (RFC 6455 section 5.5). Until 2026-10-21 every send opened a connection and upgraded it for its one frame, every receive accepted one, and a control frame was read as data.
 
 The opening handshake is HTTP/1.1, written and read by `net::http` in [xmip-core-library-net](https://github.com/IlleNilsson/xmip-core-library-net), and the `ws://` target is read as a `net::Endpoint` under this technology's schemes (`wss://` refused, there being no TLS here). Until 2026-09-28 the handshake wrote its request and its `101` by hand, read the path off the request line itself and took any status line with `101` in it for a switch, and the target was cut after `ws://` by hand.
 
 ## Acknowledgement
 
-Acceptance is at-most-once here. The sender writes its frame and closes, and
+Acceptance is at-most-once here. The sender writes its frame and goes on, and
 nothing is said back on the connection, so it is never told how the receive
 cycle ended and a crash before the Stream is durable loses it. Each frame
 arrives whole. A send writes its frame's length first, the Message's being
