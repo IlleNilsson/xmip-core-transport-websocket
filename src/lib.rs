@@ -170,6 +170,11 @@ impl Transport for WebSocketTransport {
         Directions::BOTH
     }
 
+    /// The callers turned away at their own connection (`transport::serving`).
+    fn turned_away(&self) -> transport::Turned {
+        self.receiving.turned_away()
+    }
+
     fn arrivals(&self) -> transport::Arrivals {
         transport::Arrivals::Unordered("each frame is its own, at-most-once")
     }
