@@ -13,6 +13,7 @@ use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, TcpStream};
 
 use net::http::Request;
+use transport::deadline::Within;
 use transport::error::{Result, classify};
 use transport::serving::{Open, Turn};
 use transport::{Acknowledgement, Arrived, Headers};
@@ -20,9 +21,10 @@ use transport::{Acknowledgement, Arrived, Headers};
 use crate::frame::{self, Received};
 use crate::{AT_MOST_ONCE, handshake};
 
-/// One caller's connection, upgraded on its first turn.
+/// One caller's connection, upgraded on its first turn, each read within
+/// its turn.
 pub struct Caller {
-    reader: BufReader<TcpStream>,
+    reader: BufReader<Within>,
     writer: TcpStream,
     peer: SocketAddr,
     /// The upgrade request, once it is answered.
@@ -34,8 +36,8 @@ impl Caller {
     ///
     /// # Errors
     /// Where the connection could not be cloned for its reads.
-    pub fn new(stream: TcpStream, peer: SocketAddr) -> Result<Self> {
-        let (reader, writer) = transport::socket::split(stream)?;
+    pub fn new(stream: Within, peer: SocketAddr) -> Result<Self> {
+        let (reader, writer) = stream.split()?;
         Ok(Self {
             reader,
             writer,

@@ -42,6 +42,7 @@ use transport::ArrivalIdentity;
 use transport::Configured;
 use transport::Directions;
 use transport::Transport;
+use transport::deadline::Within;
 use transport::error::{Result, protocol_error};
 use transport::listening::{Accepting, Listening};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
@@ -148,7 +149,7 @@ impl WebSocketTransport {
         // did a bare accept until 2026-09-21, so a far end whose near end
         // never connected waited for good, and a hang has no verdict.
         let (stream, peer) = socket::accept_tcp(listener, self.accept_timeout)?;
-        let mut caller = Caller::new(stream, peer)?;
+        let mut caller = Caller::new(Within::new(stream), peer)?;
         loop {
             match caller.turn()? {
                 Turn::Taken(arrived) | Turn::Last(arrived) => return Ok(arrived),
@@ -239,6 +240,13 @@ impl Configured for WebSocketTransport {
             Some(timeout) => transport.timing_out_after(timeout),
             None => transport,
         })
+    }
+
+    /// Each caller's turn on a Receive Location taking at most `turn`: its
+    /// upgrade, or one frame.
+    fn turning_within(mut self, turn: Duration) -> Self {
+        self.receiving = self.receiving.turning_within(turn);
+        self
     }
 }
 
