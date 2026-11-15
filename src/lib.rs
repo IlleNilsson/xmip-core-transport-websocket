@@ -51,7 +51,7 @@ use transport::serving::{Serving, Turn};
 use transport::socket;
 use transport::{Arrived, Taken};
 use transport::{Pool, Pooled};
-use xcore::settings::{Applies, Kind, Presence, Read, Setting, Settings};
+use xcore::settings::{Applies, Read, Settings};
 
 /// The schemes a target is written in: `ws://`, which is `http://` for the
 /// opening handshake, and `wss://`, which is `https://` and refused, this
@@ -118,14 +118,6 @@ impl WebSocketTransport {
             sending: Pool::new(),
             receiving: Serving::new(),
         }
-    }
-
-    /// Give up on a connection that does not arrive, or stops sending, as
-    /// `TcpTransport` does.
-    #[must_use]
-    pub const fn timing_out_after(mut self, timeout: Duration) -> Self {
-        self.accept_timeout = Some(timeout);
-        self
     }
 
     /// Bind and report the address actually assigned.
@@ -221,25 +213,23 @@ impl Configured for WebSocketTransport {
     /// the wait for either.
     const SETTINGS: &'static Settings = &Settings {
         technology: env!("CARGO_PKG_NAME"),
-        settings: &[Setting {
-            name: "timeout",
-            kind: Kind::Duration,
-            presence: Presence::Optional,
-            meaning: "How long a connection is waited for, accepted or opened, and how long \
-                      one that stops sending is waited on; unbounded when left out.",
-            applies: Applies::Both,
-        }],
+        settings: &[transport::configured::timeout(
+            Applies::Both,
+            None,
+            "How long a connection is waited for, accepted or opened, and how long \
+             one that stops sending is waited on; unbounded when left out.",
+        )],
     };
 
     /// The schemes a Location's address is entered with to choose this technology.
     const SCHEMES: &'static [&'static str] = &["ws"];
 
-    fn configured(address: &str, settings: &Read) -> Result<Self> {
-        let transport = Self::new(address);
-        Ok(match settings.optional_duration("timeout") {
-            Some(timeout) => transport.timing_out_after(timeout),
-            None => transport,
-        })
+    fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
+        Some(&mut self.accept_timeout)
+    }
+
+    fn configured(address: &str, _settings: &Read) -> Result<Self> {
+        Ok(Self::new(address))
     }
 
     /// Each caller's turn on a Receive Location taking at most `turn`: its
