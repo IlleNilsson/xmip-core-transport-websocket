@@ -71,7 +71,7 @@ pub struct WebSocketTransport {
     accept_timeout: Option<Duration>,
     /// The upgraded connection kept to each target, shared by every clone.
     sending: Pool<Upgraded>,
-    /// The listener the first receive binds, and the callers' connections
+    /// The listener its open binds, and the callers' connections
     /// kept open on it between their frames.
     receiving: Serving<Caller>,
 }
@@ -177,16 +177,13 @@ impl Transport for WebSocketTransport {
     }
 
     /// One message, from whichever caller sends first: one new on the
-    /// listener the first receive bound and kept, upgraded, or one whose
+    /// listener its open bound and kept, upgraded, or one whose
     /// connection is kept. Acceptance is at-most-once here: nothing is said
     /// back on the connection ([`AT_MOST_ONCE`]).
     fn receive_up_to(&self, _most: usize) -> Result<Vec<Arrived>> {
-        let arrived = self.receiving.next(
-            || self.bind(),
-            self.accept_timeout,
-            Caller::new,
-            Caller::turn,
-        )?;
+        let arrived = self
+            .receiving
+            .next(self.accept_timeout, Caller::new, Caller::turn)?;
         Ok(vec![arrived])
     }
 
@@ -243,6 +240,12 @@ impl Configured for WebSocketTransport {
     fn timed_by(mut self, clock: &std::sync::Arc<dyn xcore::Clock>) -> Self {
         self.receiving = self.receiving.timed_by(clock);
         self
+    }
+
+    /// The listener every receive takes from, bound where a Receive
+    /// Location listens for peers.
+    fn listening(&self) -> Result<Option<&str>> {
+        self.receiving.bound(|| self.bind()).map(Some)
     }
 }
 
