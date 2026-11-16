@@ -11,7 +11,7 @@ a protocol. The head a line-oriented protocol reads — lines, then a blank
 line — left it on 2026-09-25 for `net::head` in
 [xmip-core-library-net](https://github.com/IlleNilsson/xmip-core-library-net).
 
-A Receive Location keeps its listener, bound on the first receive: a peer that connects between two receives is queued and taken by the next, where until 2026-09-27 each receive bound a listener of its own and a peer between receives was refused.
+A Receive Location keeps its listener, bound as its transport is opened (`Configured::listening`; on its first receive until 2026-11-16): a peer that connects between two receives is queued and taken by the next, where until 2026-09-27 each receive bound a listener of its own and a peer between receives was refused.
 
 A connection is upgraded once and kept for every frame after. A Send Location keeps the upgraded connection to each target, its address and path (`transport::Pool`), one data frame a Message; a Receive Location keeps its callers' connections beside the listener (`transport::serving::Serving`, `src/caller.rs`), the upgrade the first turn on each and every frame after it one receive's turn, from whichever caller sends first. A ping between frames is answered with its pong and a close with a close, which ends the connection (RFC 6455 section 5.5). Until 2026-10-21 every send opened a connection and upgraded it for its one frame, every receive accepted one, and a control frame was read as data.
 
