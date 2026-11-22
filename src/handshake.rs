@@ -16,7 +16,8 @@
 use std::io::{BufRead, Write};
 
 use codec::{base64, random, sha1};
-use net::http::{Request, Response, read_request, read_response, write_request, write_response};
+use net::http::{Request, Response, read_request, read_response, refuse};
+use net::http::{write_request, write_response};
 use transport::error::{Result, protocol_error};
 
 /// The GUID RFC 6455 fixes for the accept computation.
@@ -93,10 +94,12 @@ pub fn verify_response(reader: &mut impl BufRead, key: &str) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Where the request could not be read, carried no `Sec-WebSocket-Key`,
-/// or the answer could not be written.
+/// Where the request could not be read — one HTTP refuses is answered
+/// `400` — carried no `Sec-WebSocket-Key`, or the answer could not be
+/// written.
 pub fn accept(reader: &mut impl BufRead, writer: &mut impl Write) -> Result<Request> {
-    let request = read_request(reader)?
+    let request = read_request(reader)
+        .inspect_err(|failure| refuse(writer, failure))?
         .ok_or_else(|| protocol_error("the connection closed before an upgrade request"))?;
     let key = request
         .header_value("sec-websocket-key")
@@ -147,5 +150,13 @@ mod tests {
             verify_response(&mut &answer[..], "key").is_err(),
             "no accept"
         );
+    }
+
+    #[test]
+    fn an_upgrade_request_http_refuses_is_answered_400() {
+        let request = b"GET /feed HTTP/1.1\r\nSec-WebSocket-Key : k\r\n\r\n";
+        let mut answer = Vec::new();
+        accept(&mut &request[..], &mut answer).expect_err("whitespace before the colon");
+        assert!(answer.starts_with(b"HTTP/1.1 400 Bad Request\r\n"));
     }
 }
