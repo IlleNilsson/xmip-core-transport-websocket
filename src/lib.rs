@@ -221,6 +221,13 @@ impl Configured for WebSocketTransport {
     /// The schemes a Location's address is entered with to choose this technology.
     const SCHEMES: &'static [&'static str] = &["ws"];
 
+    /// The whole address: a send reads its target as a `ws://` URL
+    /// (`send_from`), so a Send Location sends where its address says; a
+    /// Receive Location binds the address in its own terms.
+    fn own_target(address: &str) -> &str {
+        address
+    }
+
     fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
         Some(&mut self.accept_timeout)
     }
@@ -292,6 +299,27 @@ mod tests {
         transport::kept::held_across_receives(&receiver, address, 5, |at, payload| {
             WebSocketTransport::loopback().send_to(at, payload)
         });
+    }
+
+    /// A Send Location as a node builds it, from its address, sends where
+    /// the node sends it: its own target, the whole `ws://` address (the
+    /// owner, 2026-11-24: *go through each item and sort it*). Until
+    /// 2026-11-24 its target was the address without its scheme, which a
+    /// send reads under `ws://` alone, and every send was refused.
+    #[test]
+    fn a_send_location_sends_where_its_address_says() {
+        let far = WebSocketTransport::loopback().far_end().expect("a far end");
+        let address = format!("ws://{}/orders", far.address());
+        let sending = WebSocketTransport::open(&address, Applies::Send, &[])
+            .expect("sending")
+            .timing_out_after(LOOPBACK_TIMEOUT);
+        let taking = std::thread::spawn(move || far.take_one());
+
+        let sent = sending.send(WebSocketTransport::own_target(&address), b"order");
+
+        let taken = taking.join().expect("the far end");
+        sent.expect("sent where its address says");
+        assert_eq!(taken.expect("taken").bytes, b"order");
     }
 
     #[test]
