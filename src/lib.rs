@@ -27,44 +27,64 @@
 //! **Acceptance is at-most-once here** ([`AT_MOST_ONCE`]): the sender writes
 //! its frame and goes on, and nothing is said back on the connection, so it
 //! is never told how the receive cycle ended. Each frame arrives whole.
+//!
+//! **Built with its `declaration` feature alone** the crate is
+//! [`declaration`], what a Location of it is configured with, and none of
+//! the code above, which is behind the default feature: what the surfaces'
+//! library carries (ADR-0064, amendment 2026-11-26).
 
+#[cfg(feature = "default")]
 pub mod caller;
+#[cfg(feature = "declaration")]
+pub mod declaration;
+#[cfg(feature = "default")]
 pub mod frame;
+#[cfg(feature = "default")]
 pub mod handshake;
 
+#[cfg(feature = "default")]
 use std::io::BufReader;
+#[cfg(feature = "default")]
 use std::net::{TcpListener, TcpStream};
+#[cfg(feature = "default")]
 use std::time::Duration;
 
+#[cfg(feature = "default")]
 pub use caller::Caller;
+#[cfg(feature = "default")]
 use net::{Endpoint, Schemes};
-use transport::ArrivalIdentity;
-use transport::Configured;
-use transport::Directions;
-use transport::Transport;
+#[cfg(feature = "default")]
 use transport::deadline::Within;
+#[cfg(feature = "default")]
 use transport::error::{Result, protocol_error};
+#[cfg(feature = "default")]
 use transport::listening::{Accepting, Listening};
+#[cfg(feature = "default")]
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
-use transport::pool::quiet;
+#[cfg(feature = "default")]
 use transport::serving::{Serving, Turn};
-use transport::socket;
-use transport::{Arrived, Taken};
-use transport::{Pool, Pooled};
-use xcore::settings::{Applies, Read, Settings};
+#[cfg(feature = "default")]
+use transport::{ArrivalIdentity, Configured, Directions, Transport, pool::quiet, socket};
+#[cfg(feature = "default")]
+use transport::{Arrived, Pool, Pooled, Taken};
+#[cfg(feature = "default")]
+use xcore::settings::{Read, Settings};
 
 /// The schemes a target is written in: `ws://`, which is `http://` for the
 /// opening handshake, and `wss://`, which is `https://` and refused, this
 /// transport speaking no TLS.
+#[cfg(feature = "default")]
 const SCHEMES: Schemes = Schemes {
     plain: &["ws"],
     secure: &["wss"],
 };
 
 /// Why a WebSocket frame cannot be acknowledged after the receive cycle.
+#[cfg(feature = "default")]
 pub const AT_MOST_ONCE: &str = "a WebSocket frame is answered with nothing: the sender writes \
                                 it and goes on";
 
+#[cfg(feature = "default")]
 #[derive(Clone)]
 pub struct WebSocketTransport {
     bind: String,
@@ -78,11 +98,13 @@ pub struct WebSocketTransport {
 
 /// A Send Location's upgraded connection to one target, kept between its
 /// frames.
+#[cfg(feature = "default")]
 struct Upgraded {
     reader: BufReader<TcpStream>,
     writer: TcpStream,
 }
 
+#[cfg(feature = "default")]
 impl Pooled for Upgraded {
     /// The receiver says nothing back, so a frame it sent to an idle
     /// connection — a close, a ping — or its close lets the connection go.
@@ -91,6 +113,7 @@ impl Pooled for Upgraded {
     }
 }
 
+#[cfg(feature = "default")]
 impl Upgraded {
     /// A new connection to `endpoint`, upgraded.
     ///
@@ -109,6 +132,7 @@ impl Upgraded {
     }
 }
 
+#[cfg(feature = "default")]
 impl WebSocketTransport {
     #[must_use]
     pub fn new(bind: impl Into<String>) -> Self {
@@ -154,6 +178,7 @@ impl WebSocketTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Transport for WebSocketTransport {
     fn name(&self) -> &'static str {
         "websocket"
@@ -204,22 +229,10 @@ impl Transport for WebSocketTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Configured for WebSocketTransport {
-    /// The address is where a Receive Location listens; a Send Location's
-    /// `ws://host:port/path` is each send's target. The one setting bounds
-    /// the wait for either.
-    const SETTINGS: &'static Settings = &Settings {
-        technology: env!("CARGO_PKG_NAME"),
-        settings: &[transport::configured::timeout(
-            Applies::Both,
-            None,
-            "How long a connection is waited for, accepted or opened, and how long \
-             one that stops sending is waited on; unbounded when left out.",
-        )],
-    };
-
-    /// The schemes a Location's address is entered with to choose this technology.
-    const SCHEMES: &'static [&'static str] = &["ws"];
+    const SETTINGS: &'static Settings = declaration::SETTINGS;
+    const SCHEMES: &'static [&'static str] = declaration::SCHEMES;
 
     /// The whole address: a send reads its target as a `ws://` URL
     /// (`send_from`), so a Send Location sends where its address says; a
@@ -256,6 +269,7 @@ impl Configured for WebSocketTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl WebSocketTransport {
     /// Both ends on this machine: an ephemeral local port, the loopback
     /// timeout on the accept, the connect and the reads.
@@ -265,12 +279,14 @@ impl WebSocketTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Accepting for WebSocketTransport {
     fn take_one(self, listener: &TcpListener) -> Result<Taken> {
         self.accept_one(listener)?.taken()
     }
 }
 
+#[cfg(feature = "default")]
 impl Loopback for WebSocketTransport {
     fn arrival_identity(&self) -> ArrivalIdentity {
         ArrivalIdentity::PEER
@@ -289,7 +305,7 @@ impl Loopback for WebSocketTransport {
 mod tests {
     use super::*;
     use transport::payload::edge_payloads;
-    use xcore::settings::Given;
+    use xcore::settings::{Applies, Given};
 
     #[test]
     fn every_receive_takes_from_the_listener_the_first_bound() {
